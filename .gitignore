@@ -1,3 +1,4 @@
 .env
 steg
 results
+*/__pycache__/
