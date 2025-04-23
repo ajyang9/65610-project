@@ -50,7 +50,7 @@ class Crypto(nn.Module):
         # ct = target_ct(sk, message)
         sk_ct = torch.cat([sk, ct], dim=1)
         rec_message = self.quantize(self.receiver(sk_ct))
-        adv_message = self.quantize(self.adversary(ct))
+        adv_message = ct # self.quantize(self.adversary(ct))
         return ct, rec_message, adv_message
     
     def rec_loss(self, message, rec_message):
@@ -61,7 +61,7 @@ class Crypto(nn.Module):
         
         
     
-def train(model, model_config, optimizer, train_config):
+def train(model, model_config, sender_optim, receiver_optim, adversary_optim, train_config):
     batch_size = train_config["batch_size"]
     n_steps = train_config["n_steps"]
     eval_steps = train_config["eval_steps"]
@@ -84,22 +84,19 @@ def train(model, model_config, optimizer, train_config):
         adv_loss = model.adv_loss(message, adv_message)
         adv_losses.append(adv_loss.item())
 
-        loss = rec_loss - 10 * adv_loss
+        loss = rec_loss - adv_loss
     
-        optimizer.zero_grad()
+        sender_optim.zero_grad()
+        receiver_optim.zero_grad()
+        adversary_optim.zero_grad()
         loss.backward()
-
-        for param in model.adversary.parameters():
-            if param.grad is not None:
-                if step % 10 == 0:
-                    param.grad = -param.grad
-                else:
-                    param.grad = None
-
-        optimizer.step()
-
-        adv_loss = model.adv_loss(message, adv_message)
-
+        
+        if step % 8 == 0:
+            receiver_optim.step()
+        elif step % 8 == 1:
+            adversary_optim.step()
+        else:
+            sender_optim.step()
 
         pbar.set_description(f"loss: {loss.item():3f}, rec_loss: {rec_loss.item():3f}, adv_loss: {adv_loss.item():3f}")
 
@@ -108,7 +105,6 @@ def train(model, model_config, optimizer, train_config):
             sk = random_binary((n_samples, sk_dim))
             message = random_binary((n_samples, message_dim))
             ct, rec_message, adv_message = model(sk, message)
-            print(F.mse_loss(rec_message, message))
             for i in range(n_samples):
                 print(f"sk: {sk[i]}")
                 print(f"message: {message[i]}")
@@ -126,9 +122,9 @@ if __name__ == "__main__":
     model_config = {
         "sk_dim": 1,
         "message_dim": 1,
-        "ct_dim": 1,
-        "hidden_dim": 32,
-        "depth": 4
+        "ct_dim": 4,
+        "hidden_dim": 64,
+        "depth": 8
     }
     train_config = {
         "batch_size": 512,
@@ -137,8 +133,10 @@ if __name__ == "__main__":
         "n_samples": 5,
     }
     model = Crypto(model_config)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
-    train(model, model_config, optimizer, train_config)
+    sender_optim = torch.optim.Adam(model.sender.parameters(), lr=1e-4)
+    receiver_optim = torch.optim.Adam(model.receiver.parameters(), lr=1e-3)
+    adversary_optim = torch.optim.Adam(model.adversary.parameters(), lr=1e-3, maximize=True)
+    train(model, model_config, sender_optim, receiver_optim, adversary_optim, train_config)
 
 
 
