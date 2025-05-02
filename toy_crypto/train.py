@@ -7,8 +7,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-def random_binary(shape):
-    return torch.randint(0, 2, shape).float()
+def random_binary(shape, ratio=0.5):
+    return torch.bernoulli(torch.full(shape, ratio)).float()
 
 def target_ct(sk, message):
     return (torch.round((sk + message)) % 2).float()
@@ -47,10 +47,10 @@ class Crypto(nn.Module):
     def forward(self, sk, message):
         sk_message = torch.cat([sk, message], dim=1)
         ct = self.quantize(self.sender(sk_message))
-        # ct = target_ct(sk, message)
+        ct = target_ct(sk, message)
         sk_ct = torch.cat([sk, ct], dim=1)
         rec_message = self.quantize(self.receiver(sk_ct))
-        adv_message = ct # self.quantize(self.adversary(ct))
+        adv_message = self.quantize(self.adversary(ct))
         return ct, rec_message, adv_message
     
     def rec_loss(self, message, rec_message):
@@ -58,7 +58,52 @@ class Crypto(nn.Module):
 
     def adv_loss(self, message, adv_message):
         return F.mse_loss(adv_message, message)
-        
+
+def get_params(model):
+    return torch.cat([p.data.view(-1) for p in model.parameters()])
+
+def set_params(model, params):
+    i = 0
+    for p in model.parameters():
+        numel = p.numel()
+        p.data.copy_(params[i:i+numel].view(p.size()))
+        i += numel
+
+def loss_landscape(model, sk, message):
+    # plot loss landscape against self.sender.parameters and self.receiver.parameters
+    def get_loss(sender_params, receiver_params):
+        set_params(model.sender, sender_params)
+        set_params(model.receiver, receiver_params)
+        ct, rec_message, adv_message = model(sk, message)
+        rec_loss = model.rec_loss(message, rec_message)
+        adv_loss = model.adv_loss(message, adv_message)
+        loss = rec_loss - adv_loss
+        return loss.item()
+    
+    init_sender_params = get_params(model.sender)
+    init_receiver_params = get_params(model.receiver)
+    sender_dir = torch.randn_like(init_sender_params)
+    receiver_dir = torch.randn_like(init_receiver_params)
+    sender_dir /= torch.norm(sender_dir)
+    receiver_dir /= torch.norm(receiver_dir)
+
+    alphas = np.linspace(-5, 5, 100)
+    betas = np.linspace(-5, 5, 100)
+    losses = np.zeros((len(alphas), len(betas)))
+    for i, alpha in enumerate(alphas):
+        for j, beta in enumerate(betas):
+            sender_params = init_sender_params + alpha * sender_dir
+            receiver_params = init_receiver_params + beta * receiver_dir
+            losses[i, j] = get_loss(sender_params, receiver_params) 
+    
+    A, B = np.meshgrid(alphas, betas)
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    ax.plot_surface(A, B, losses.T, cmap='viridis')
+    ax.set_xlabel('Direction 1')
+    ax.set_ylabel('Direction 2')
+    ax.set_zlabel('Loss')
+    plt.show()
         
     
 def train(model, model_config, sender_optim, receiver_optim, adversary_optim, train_config):
@@ -91,12 +136,10 @@ def train(model, model_config, sender_optim, receiver_optim, adversary_optim, tr
         adversary_optim.zero_grad()
         loss.backward()
         
-        if step % 8 == 0:
-            receiver_optim.step()
-        elif step % 8 == 1:
-            adversary_optim.step()
-        else:
-            sender_optim.step()
+        adversary_optim.step()
+        sender_optim.step()
+        receiver_optim.step()
+        
 
         pbar.set_description(f"loss: {loss.item():3f}, rec_loss: {rec_loss.item():3f}, adv_loss: {adv_loss.item():3f}")
 
@@ -122,9 +165,9 @@ if __name__ == "__main__":
     model_config = {
         "sk_dim": 1,
         "message_dim": 1,
-        "ct_dim": 4,
-        "hidden_dim": 64,
-        "depth": 8
+        "ct_dim": 1,
+        "hidden_dim": 32,
+        "depth": 4
     }
     train_config = {
         "batch_size": 512,
@@ -133,10 +176,15 @@ if __name__ == "__main__":
         "n_samples": 5,
     }
     model = Crypto(model_config)
-    sender_optim = torch.optim.Adam(model.sender.parameters(), lr=1e-4)
-    receiver_optim = torch.optim.Adam(model.receiver.parameters(), lr=1e-3)
-    adversary_optim = torch.optim.Adam(model.adversary.parameters(), lr=1e-3, maximize=True)
-    train(model, model_config, sender_optim, receiver_optim, adversary_optim, train_config)
+    sk = random_binary((train_config["batch_size"], model_config["sk_dim"]))
+    message = random_binary((train_config["batch_size"], model_config["message_dim"]))
+    loss_landscape(model, sk, message)
+
+
+    # sender_optim = torch.optim.SGD(model.sender.parameters(), lr=1e-3)
+    # receiver_optim = torch.optim.SGD(model.receiver.parameters(), lr=1e-3)
+    # adversary_optim = torch.optim.SGD(model.adversary.parameters(), lr=1e-3, maximize=True)
+    # train(model, model_config, sender_optim, receiver_optim, adversary_optim, train_config)
 
 
 

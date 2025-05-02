@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from torch.distributions import Categorical
 
+C = 1e9
 
 def random_binary(shape):
     return torch.randint(0, 2, shape)
@@ -31,6 +32,9 @@ class Crypto(nn.Module):
         self.receiver = Model(num_layers, dim, num_heads, sk_len + ct_len, message_len, 2)
         self.adversary = Model(num_layers, dim, num_heads, ct_len, message_len, 2)
     
+    def target_rec(self, sk, ct):
+        return Categorical(logits=index2onehot((sk + ct) % 2, 2))
+    
     def forward(self, sk, message, temperature=1.0):
         sk_onehot = index2onehot(sk, 2)
         message_onehot = index2onehot(message, 2)
@@ -40,8 +44,11 @@ class Crypto(nn.Module):
         ct = onehot2index(ct_onehot)
 
         sk_ct_onehot = torch.cat([sk_onehot, ct_onehot], dim=1)  
-        rec_distribution = self.receiver(sk_ct_onehot)
+        logits_0 = (ct_onehot * sk_onehot).sum(dim=-1, keepdim=True)
+        logits_1 = 1 - logits_0
+        rec_distribution = Categorical(torch.cat([logits_0 * C, logits_1 * C], dim=2)) #self.receiver(sk_ct_onehot)
         adv_distribution = self.adversary(ct_onehot)
+
         return ct, rec_distribution, adv_distribution
     
     def rec_loss(self, message, rec_distribution):
@@ -75,20 +82,16 @@ def train(model, model_config, sender_optim, receiver_optim, adversary_optim, tr
         adv_loss = model.adv_loss(message, adv_distribution)
         adv_losses.append(adv_loss)
 
-        loss = rec_loss - adv_loss
+        loss = rec_loss # - adv_loss
     
         sender_optim.zero_grad()
-        receiver_optim.zero_grad()
-        adversary_optim.zero_grad()
+        # receiver_optim.zero_grad()
+        # adversary_optim.zero_grad()
         loss.backward()
         
-        if step % 400 < 200:
-            adversary_optim.step()
-            sender_optim.step()
-        else: 
-            receiver_optim.step()
-            sender_optim.step()
-        
+        # adversary_optim.step()
+        sender_optim.step()
+        # receiver_optim.step()
             
 
         pbar.set_description(f"loss: {loss:3f}, rec_loss: {rec_loss:3f}, adv_loss: {adv_loss:3f}")
@@ -129,9 +132,9 @@ if __name__ == "__main__":
         "n_samples": 5,
     }
     model = Crypto(model_config)
-    sender_optim = torch.optim.SGD(model.sender.parameters(), lr=1e-2)
-    receiver_optim = torch.optim.SGD(model.receiver.parameters(), lr=1e-2)
-    adversary_optim = torch.optim.SGD(model.adversary.parameters(), lr=1e-2, maximize=True)
+    sender_optim = torch.optim.Adam(model.sender.parameters(), lr=1e-2)
+    receiver_optim = torch.optim.Adam(model.receiver.parameters(), lr=1e-2)
+    adversary_optim = torch.optim.Adam(model.adversary.parameters(), lr=1e-2, maximize=True)
     train(model, model_config, sender_optim, receiver_optim, adversary_optim, train_config)
 
 
