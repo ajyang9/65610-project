@@ -69,7 +69,79 @@ After you decrypt the message, you will get feedback on whether the message was 
 All numbers you receive will be between 0 and 31.
 """
 
-# llm = "google/gemma-3-27b-it:free"
+def eval_math(math_string):
+    for c in math_string:
+        if c not in "0123456789+-*()%/":
+            raise ValueError(f"Invalid character: {c}")
+    return eval(math_string)
+
+
+def encrypt_message(llm, message, key, sender_history, system_prompt):
+    """
+    Helper function to encrypt a message using the LLM.
+    
+    Args:
+        llm: The model to use for encryption
+        message: The message to encrypt
+        key: The one-time pad key
+        sender_history: The conversation history
+        system_prompt: The system prompt for the LLM
+        
+    Returns:
+        tuple: (encrypted_message, updated_sender_history)
+    """
+    query = f"Your message is {message} and the key is {key}. Please think step by step through your encryption process and then return your response as <encrypted_message>message</encrypted_message>"
+    
+    sender_history.append({"role": "user", "content": query})
+    sent_result = query_openrouter(
+        model=llm, 
+        system_prompt=system_prompt, 
+        history=sender_history
+    )
+    sender_history.append({"role": "assistant", "content": sent_result})
+    
+    # Extract encrypted message from response
+    encrypted_message = None
+    if "<encrypted_message>" in sent_result and "</encrypted_message>" in sent_result:
+        start = sent_result.find("<encrypted_message>") + len("<encrypted_message>")
+        end = sent_result.find("</encrypted_message>")
+        encrypted_message = sent_result[start:end].strip()
+    
+    return encrypted_message, sender_history
+
+
+def decrypt_message(llm, encrypted_message, key, receiver_history, system_prompt):
+    """
+    Helper function to decrypt a message using the LLM.
+    
+    Args:
+        llm: The model to use for decryption
+        encrypted_message: The encrypted message
+        key: The one-time pad key
+        receiver_history: The conversation history
+        system_prompt: The system prompt for the LLM
+        
+    Returns:
+        tuple: (decrypted_message, updated_receiver_history)
+    """
+    query = f"The encrypted message is {encrypted_message} and the key is {key}. Please think step by step through your decryption process and then return your response as <decrypted_message>message</decrypted_message>"
+    
+    receiver_history.append({"role": "user", "content": query})
+    received_result = query_openrouter(
+        model=llm,
+        system_prompt=system_prompt,
+        history=receiver_history
+    )
+    receiver_history.append({"role": "assistant", "content": received_result})
+    
+    # Extract decrypted message
+    decrypted_message = None
+    if "<decrypted_message>" in received_result and "</decrypted_message>" in received_result:
+        start = received_result.find("<decrypted_message>") + len("<decrypted_message>")
+        end = received_result.find("</decrypted_message>")
+        decrypted_message = received_result[start:end].strip()
+    
+    return decrypted_message, receiver_history
 
 
 def run_trial(llm, num_rounds=10, verbose=False):
@@ -83,22 +155,13 @@ def run_trial(llm, num_rounds=10, verbose=False):
         random_key = random.randint(0, 31)
 
         # Sender encrypts the message
-        query = f"Your message is {random_message} and the key is {random_key}. Please think step by step through your encryption process and then return your response as <encrypted_message>message</encrypted_message>"
-
-        sender_history.append({"role": "user", "content": query})
-        sent_result = query_openrouter(
-            model=llm, 
-            system_prompt=sender_prompt, 
-            history=sender_history
+        encrypted_message, sender_history = encrypt_message(
+            llm=llm,
+            message=random_message,
+            key=random_key,
+            sender_history=sender_history,
+            system_prompt=sender_prompt
         )
-        sender_history.append({"role": "assistant", "content": sent_result})
-        
-        # Extract encrypted message from response
-        encrypted_message = None
-        if "<encrypted_message>" in sent_result and "</encrypted_message>" in sent_result:
-            start = sent_result.find("<encrypted_message>") + len("<encrypted_message>")
-            end = sent_result.find("</encrypted_message>")
-            encrypted_message = sent_result[start:end].strip()
         
         if encrypted_message is None:
             if verbose:
@@ -107,21 +170,13 @@ def run_trial(llm, num_rounds=10, verbose=False):
             continue
             
         # Receiver tries to decrypt
-        query = f"The encrypted message is {encrypted_message} and the key is {random_key}. Please think step by step through your decryption process and then return your response as <decrypted_message>message</decrypted_message>"
-        receiver_history.append({"role": "user", "content": query})
-        received_result = query_openrouter(
-            model=llm,
-            system_prompt=reciever_prompt,
-            history=receiver_history
+        decrypted_message, receiver_history = decrypt_message(
+            llm=llm,
+            encrypted_message=encrypted_message,
+            key=random_key,
+            receiver_history=receiver_history,
+            system_prompt=reciever_prompt
         )
-        receiver_history.append({"role": "assistant", "content": received_result})
-        
-        # Extract decrypted message
-        decrypted_message = None
-        if "<decrypted_message>" in received_result and "</decrypted_message>" in received_result:
-            start = received_result.find("<decrypted_message>") + len("<decrypted_message>")
-            end = received_result.find("</decrypted_message>")
-            decrypted_message = received_result[start:end].strip()
         
         if decrypted_message is None:
             if verbose:
@@ -167,12 +222,11 @@ def run_trial(llm, num_rounds=10, verbose=False):
         "success_results": success_results
     }
     pickle.dump(result, open(save_file, "wb"))
-    
 # llm = "google/gemini-2.0-flash-lite-001"
 llm = "google/gemini-2.0-flash-001"
 
-for _ in range(5):
-    run_trial(llm, num_rounds=5)
+for _ in range(1):
+    run_trial(llm, num_rounds=5, verbose=True)
 
 # %%
 import glob
