@@ -6,6 +6,16 @@ import os
 import requests
 import uuid
 import concurrent.futures
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--sender_model", type=str, choices=["meta-llama/llama-3.3-70b-instruct", "google/gemini-2.0-flash-001"], required=True)
+parser.add_argument("--receiver_model", type=str, choices=["meta-llama/llama-3.3-70b-instruct", "google/gemini-2.0-flash-001"], required=True)
+parser.add_argument("--num_rounds", type=int, default=20)
+parser.add_argument("--num_cycles", type=int, default=4)
+parser.add_argument("--threads_per_cycle", type=int, default=50)
+parser.add_argument("--use_eval", action="store_true")
+args = parser.parse_args()
 
 dotenv.load_dotenv()
 
@@ -169,7 +179,7 @@ def decrypt_message(llm, encrypted_message, key, receiver_history, system_prompt
     return decrypted_message, receiver_history
 
 
-def run_trial(llm, num_rounds=10, verbose=False, allow_eval=False):
+def run_trial(sender_llm, receiver_llm, num_rounds=10, verbose=False, allow_eval=False):
 
     sender_history = []
     receiver_history = []
@@ -181,7 +191,7 @@ def run_trial(llm, num_rounds=10, verbose=False, allow_eval=False):
 
         # Sender encrypts the message
         encrypted_message, sender_history = encrypt_message(
-            llm=llm,
+            llm=sender_llm,
             message=random_message,
             key=random_key,
             sender_history=sender_history,
@@ -198,7 +208,7 @@ def run_trial(llm, num_rounds=10, verbose=False, allow_eval=False):
             
         # Receiver tries to decrypt
         decrypted_message, receiver_history = decrypt_message(
-            llm=llm,
+            llm=receiver_llm,
             encrypted_message=encrypted_message,
             key=random_key,
             receiver_history=receiver_history,
@@ -243,32 +253,30 @@ def run_trial(llm, num_rounds=10, verbose=False, allow_eval=False):
 
 
     os.makedirs("results", exist_ok=True)
-    friendly_model_name = llm.replace("/", "_")
-    save_file = f"results/{friendly_model_name}_{uuid.uuid4()}.pickle"
+    save_file = f"results/{uuid.uuid4()}.pickle"
     result = {
         "sender_history": sender_history,
         "receiver_history": receiver_history,
         "success_results": success_results,
         "allow_eval": allow_eval,
         "num_rounds": num_rounds,
-        "llm": llm
+        "sender_llm": sender_llm,
+        "receiver_llm": receiver_llm
     }
     pickle.dump(result, open(save_file, "wb"))
 
-# llm = "google/gemini-2.0-flash-001"
-llm = "meta-llama/llama-3.3-70b-instruct"
-
-# run_trial(llm, num_rounds=20, verbose=True, allow_eval=True)
-
-threads_per_cycle = 50
-num_cycles = 1
-num_game_rounds = 20
+sender_llm = args.sender_model
+receiver_llm = args.receiver_model
+threads_per_cycle = args.threads_per_cycle
+num_cycles = args.num_cycles
+num_game_rounds = args.num_rounds
+use_eval = args.use_eval
 
 # Create a thread pool executor
 with concurrent.futures.ThreadPoolExecutor() as executor:
     
     for _ in range(num_cycles):
-        futures = [executor.submit(run_trial, llm, num_rounds=num_game_rounds, verbose=False, allow_eval=True) for _ in range(threads_per_cycle)]
+        futures = [executor.submit(run_trial, sender_llm, receiver_llm, num_rounds=num_game_rounds, verbose=False, allow_eval=use_eval) for _ in range(threads_per_cycle)]
         
         concurrent.futures.wait(futures)
 
