@@ -178,8 +178,33 @@ def decrypt_message(llm, encrypted_message, key, receiver_history, system_prompt
     
     return decrypted_message, receiver_history
 
+def get_counts(sender_llm, receiver_llm, use_eval, num_rounds=20):
+    # Load all result files
+    import glob
+    result_files = glob.glob("results/*.pickle")
+    count = 0
+    # Group results by model and eval setting
+    for file in result_files:
+        with open(file, "rb") as f:
+            result = pickle.load(f)
+            if result["num_rounds"] != num_rounds:
+                continue
+            if result["sender_llm"] != sender_llm:
+                continue
+            if result["receiver_llm"] != receiver_llm:
+                continue
+            if result["allow_eval"] != use_eval:
+                continue
+            count += 1
+
+    return count
+
 
 def run_trial(sender_llm, receiver_llm, num_rounds=10, verbose=False, allow_eval=False):
+
+    counts = get_counts(sender_llm, receiver_llm, allow_eval, num_rounds)
+    if counts > 200:
+        return
 
     sender_history = []
     receiver_history = []
